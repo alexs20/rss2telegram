@@ -1,0 +1,12 @@
+# runtime + build artifacts
+dist/
+__pycache__/
+*.pyc
+.git
+
+# real config with bot tokens / chat ids - keep local, never commit
+data/config.yml
+data/*.db
+
+# the committed template stays tracked:
+!data/config.example.yml

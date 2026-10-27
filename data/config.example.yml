@@ -1,0 +1,65 @@
+# rss2telegram configuration - template
+# ---------------------------------------------------------------------------
+# Copy to config.yml and fill in real values:
+#   cp config.example.yml config.yml
+#
+# config.yml is git-ignored - it holds bot tokens and chat ids and must
+# never be committed.
+#
+#   docker compose run --rm rss2tg --check     # validate this file
+#
+# chat_id notes:
+#   * group / supergroup ids are negative and MUST stay quoted: "-100XXXXXXXXXXX"
+#   * a numeric id without quotes is still parsed as a string by the app,
+#     but quoting avoids surprises in YAML
+#   * channels: the bot has to be an administrator, not just a member
+#   * find an id with:  curl -s "https://api.telegram.org/bot<TOKEN>/getUpdates"
+# ---------------------------------------------------------------------------
+
+# Default polling interval in seconds, used by every feed that does not set its
+# own. 900 = 15 minutes.
+interval: 900
+
+# Pause between two consecutive messages. Telegram tolerates roughly 20
+# messages per minute per group; 2s keeps well below the limit.
+send_delay: 2.0
+
+# SQLite dedupe database, inside the container. The compose file mounts the
+# data directory on /data so it survives restarts.
+state_db: /data/rss2tg.db
+
+# How long to keep delivery history. Needs to be longer than the oldest item a
+# feed can still show, otherwise a very old post could be sent twice.
+retention_days: 90
+
+# First sight of a feed:
+#   skip = record existing items, send nothing (recommended)
+#   send = push the whole current archive into the chat
+bootstrap: skip
+
+# HTTP timeout for feed downloads, in seconds.
+http_timeout: 20
+
+log_level: INFO
+
+feeds:
+  # -------------------------------------------------------------------------
+  # Example: RFD forums, one bot, one group.
+  # Note the URL: forums.redflagdeals.com/feed/ redirects to the homepage and
+  # yields HTML, which fails to parse. /feed.php is the working feed.
+  # -------------------------------------------------------------------------
+  - url: https://forums.redflagdeals.com/feed.php
+    bot_token: "123456789:AAExampleTokenReplaceMe"   # from @BotFather
+    chat_id: "-100XXXXXXXXXXX"                       # your group id
+    include_description: true    # include a cleaned-up summary line
+    include_statistics: false    # strip "Statistics: Posted by ..." meta line
+    disable_preview: true        # keep the chat tidy
+
+  # -------------------------------------------------------------------------
+  # Example: a different bot posting to a different group, own interval
+  # -------------------------------------------------------------------------
+  - url: https://hnrss.org/frontpage
+    bot_token: "987654321:BBAnotherTokenReplaceMe"   # from @BotFather
+    chat_id: "-100YYYYYYYYYYY"                       # your group id
+    interval: 3600               # override the global 900s for this feed only
+    include_description: false

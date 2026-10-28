@@ -1,0 +1,224 @@
+name: release
+
+# One tag push does everything:
+#   1. builds the image for linux/amd64 and linux/arm64
+#   2. smoke-tests it (config validation + non-root check)
+#   3. exports per-arch tarballs for `docker load` / Portainer import
+#   4. pushes a multi-arch image to ghcr.io so `docker pull` / compose work
+#   5. creates the GitHub release and attaches the tarballs + compose + checksums
+#
+# Cut a release with:
+#   git tag -a v1.2.3 -m "rss2telegram 1.2.3" && git push origin v1.2.3
+#
+# Re-running a release (e.g. after a failed build) is safe: the release step
+# uploads assets with --clobber instead of failing on an existing release.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish, e.g. v1.2.3"
+        required: true
+        type: string
+
+permissions:
+  contents: write # create the release and upload assets
+  packages: write # push to ghcr.io with GITHUB_TOKEN
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  version:
+    name: resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      semver: ${{ steps.resolve.outputs.semver }}
+    steps:
+      - name: Validate tag
+        id: resolve
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-${GITHUB_REF_NAME}}"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::'$tag' is not vMAJOR.MINOR.PATCH (releases are tag-driven)"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "semver=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "releasing $tag"
+
+  build:
+    name: build linux/${{ matrix.arch }}
+    needs: version
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+          - arch: arm64
+    steps:
+      - uses: actions/checkout@v7
+
+      # arm64 is built (and, on amd64 runners, not run) through QEMU emulation.
+      # The image is pure-Python wheels only, so this is minutes, not hours.
+      - uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          tags: |
+            rss2telegram:${{ needs.version.outputs.semver }}
+            rss2telegram:latest
+          labels: |
+            org.opencontainers.image.title=rss2telegram
+            org.opencontainers.image.description=RSS/Atom to Telegram forwarder
+            org.opencontainers.image.version=${{ needs.version.outputs.semver }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha,scope=linux-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=linux-${{ matrix.arch }}
+
+      # Proves the image is not just built but actually starts. Only on amd64:
+      # a loaded arm64 image cannot run on an amd64 runner without emulation.
+      # --check validates the config and opens the SQLite file, no network calls.
+      - name: Smoke test
+        if: matrix.arch == 'amd64'
+        env:
+          SEMVER: ${{ needs.version.outputs.semver }}
+        run: |
+          set -euo pipefail
+          mkdir -p .smoke
+          cp data/config.example.yml .smoke/config.yml
+          chmod 777 .smoke # the container runs as uid 10001, not the runner user
+          docker run --rm -v "$PWD/.smoke:/data" "rss2telegram:${SEMVER}" --check
+          # The Dockerfile drops to an unprivileged user; make sure that held.
+          uid="$(docker run --rm --entrypoint id "rss2telegram:${SEMVER}" -u)"
+          test "$uid" = "10001" || { echo "::error::image runs as uid $uid, expected 10001"; exit 1; }
+          echo "runs as uid $uid, config validates"
+
+      # Both tags land in the tarball's RepoTags, so `docker load` restores
+      # rss2telegram:latest as well - that is what portainer-stack.yml and the
+      # README already reference.
+      - name: Export tarball
+        env:
+          SEMVER: ${{ needs.version.outputs.semver }}
+        run: |
+          set -euo pipefail
+          out="rss2telegram-${SEMVER}-linux-${{ matrix.arch }}.tar.gz"
+          docker save "rss2telegram:${SEMVER}" rss2telegram:latest | gzip -9 > "$out"
+          ls -lh "$out"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: image-linux-${{ matrix.arch }}
+          path: rss2telegram-*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: push to ghcr.io
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # v1.2.3 -> :1.2.3, :1.2, :latest
+      - name: Derive tags and labels
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ needs.version.outputs.semver }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.version.outputs.semver }}
+            type=raw,value=latest
+
+      # This build fills the cache left by the matrix above, so it is mostly a
+      # cache hit - the real cost is assembling the manifest list.
+      - name: Build and push multi-arch
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: |
+            type=gha,scope=linux-amd64
+            type=gha,scope=linux-arm64
+
+  release:
+    name: publish GitHub release
+    needs: [version, build, publish]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Assemble release assets
+        env:
+          SEMVER: ${{ needs.version.outputs.semver }}
+          IMAGE: ${{ env.REGISTRY }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          mv artifacts/*.tar.gz dist/
+          cp data/config.example.yml dist/config.example.yml
+          cp deploy/RELEASE-INSTALL.txt dist/INSTALL.txt
+          # Pin the exact image so a downloaded compose file never drifts.
+          sed -E "s#\\\$\\{RSS2TG_IMAGE:-[^}]*\\}#${IMAGE}:${SEMVER}#" \
+            docker-compose.release.yml > dist/docker-compose.yml
+          grep -q "image: ${IMAGE}:${SEMVER}" dist/docker-compose.yml
+          ( cd dist && sha256sum ./*.tar.gz ./config.example.yml ./docker-compose.yml > SHA256SUMS.txt )
+          echo "--- assets ---" && ls -lh dist
+
+      # Re-runs overwrite assets rather than failing on "release already exists".
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG exists, updating assets"
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --title "$TAG" --generate-notes --verify-tag
+          fi
+          gh release view "$TAG" --json url -q .url

@@ -1,0 +1,43 @@
+# rss2telegram - image-only compose file (no build context, no repo checkout).
+# ---------------------------------------------------------------------------
+# Uses the published image instead of building from source:
+#
+#   mkdir -p data && cp config.example.yml data/config.yml   # edit it
+#   sudo chown -R 10001:10001 data
+#   docker compose -f docker-compose.release.yml up -d
+#
+# Every GitHub release also ships a copy of this file with the exact version
+# pinned (image: ghcr.io/alexs20/rss2telegram:1.2.3) - prefer that one if you
+# want reproducible upgrades.
+#
+# Prefer the tarballs? The same release carries rss2telegram-<version>-linux-
+# amd64.tar.gz / -arm64.tar.gz: gunzip -c ... | docker load, then run this file.
+# ---------------------------------------------------------------------------
+
+services:
+  rss2tg:
+    # Release copies replace this expression with the pinned image tag.
+    image: ${RSS2TG_IMAGE:-ghcr.io/alexs20/rss2telegram:latest}
+    container_name: rss2tg
+    restart: unless-stopped
+
+    # The image runs as uid 10001 (user "app"). Leave this out and make sure the
+    # bind-mounted data directory is owned by 10001, or the container cannot read
+    # config.yml or write rss2tg.db:
+    #   sudo chown -R 10001:10001 ./data
+    # On a NAS you usually map the host owner instead, e.g. Synology's 1026:100:
+    # user: "1026:100"
+
+    environment:
+      TZ: America/Edmonton
+      LOG_LEVEL: INFO
+
+    volumes:
+      # Holds config.yml (required, before first start) and rss2tg.db.
+      - ./data:/data
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

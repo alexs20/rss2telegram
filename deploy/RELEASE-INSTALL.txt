@@ -1,0 +1,104 @@
+rss2telegram - install from a GitHub release
+============================================
+
+What is in this release
+-----------------------
+  docker-compose.yml                          compose file, image pinned to this version
+  config.example.yml                          template - copy to data/config.yml and edit
+  rss2telegram-<version>-linux-amd64.tar.gz   image tarball for x86_64
+  rss2telegram-<version>-linux-arm64.tar.gz   image tarball for arm64 / Raspberry Pi
+  SHA256SUMS.txt                              checksums for the files above
+  INSTALL.txt                                 this file
+
+The image contains no config and no tokens. Feeds, bot tokens and chat ids stay
+in data/config.yml on your machine, so changing them never needs a new image.
+
+
+Option A - pull the published image (easiest, needs internet)
+-------------------------------------------------------------
+  mkdir -p rss2telegram/data
+  cd rss2telegram
+  cp /path/to/config.example.yml data/config.yml
+  $EDITOR data/config.yml                       # bot tokens + chat ids
+
+  # the container runs as uid 10001 - it must be able to read config.yml and
+  # write rss2tg.db in this directory
+  sudo chown -R 10001:10001 data
+
+  # copy docker-compose.yml from this release
+  docker compose run --rm rss2tg --check        # validate, no messages sent
+  docker compose up -d
+  docker compose logs -f                        # expect "rss2tg up: N feed(s)"
+
+
+Option B - load a tarball (no registry, offline, Portainer import)
+------------------------------------------------------------------
+  gunzip -c rss2telegram-<version>-linux-amd64.tar.gz | docker load
+  # -> Loaded image: rss2telegram:<version>
+  #    Loaded image: rss2telegram:latest
+
+  Then follow Option A, but put this in docker-compose.yml instead of the
+  pinned image line:
+
+      image: rss2telegram:latest
+
+  Portainer instead of compose:
+    Portainer -> Images -> Import -> Upload
+      (the UI wants the UNCOMPRESSED .tar:  gunzip -k rss2telegram-...tar.gz )
+    Portainer -> Stacks -> Add stack -> Web editor -> paste docker-compose.yml
+      - relative bind paths resolve against Portainer's working directory,
+        not the stack folder, so use an absolute path such as
+        /opt/rss2telegram/data:/data
+      - `image:` lines with ${VAR:-default} need the variable set in the
+        stack's environment section, or just replace the line with
+        rss2telegram:latest
+
+
+Which architecture do I need
+----------------------------
+  x86_64 / Synology DS220+ / most VPS   -> linux-amd64
+  Raspberry Pi 4/5, arm64 NAS, Apple M* -> linux-arm64
+  Not sure:  uname -m   (x86_64 -> amd64, aarch64 -> arm64)
+  Or skip the tarballs and let docker pick:  docker pull ghcr.io/alexs20/rss2telegram:<version>
+
+
+Verify a download
+-----------------
+  sha256sum -c SHA256SUMS.txt
+
+  The tarballs are built on GitHub Actions and the image never contains your
+  config; the compose file in this release is pinned to the exact version.
+
+
+First start does not spam your chat
+-----------------------------------
+  The default bootstrap setting is `skip`: on the first sight of a feed the
+  existing items are recorded and nothing is sent. Expect log lines like
+  "<feed>: baseline recorded (N items, nothing sent)".
+
+
+Sanity check that never sends a message
+---------------------------------------
+  docker compose run --rm rss2tg --check
+
+  Prints the parsed feeds, their intervals, chat ids and history counts, and
+  exits non-zero if anything is wrong with the config.
+
+
+Troubleshooting
+---------------
+  "config file not readable"
+      data/config.yml is missing, misnamed (.yaml is also accepted), or not
+      readable by uid 10001. Check both `ls -l data/` and the volume path.
+
+  "Error response from daemon: pull access denied"
+      The ghcr.io package is private. Either make it public (package settings
+      -> change visibility) or use the tarball from this release.
+
+  nothing arrives in Telegram
+      Run with LOG_LEVEL=DEBUG and confirm the bot is an admin of the channel.
+      Group ids are negative and must be quoted in config.yml.
+
+  container restarts in a loop
+      docker compose logs --tail=50 rss2tg   - usually a YAML error or a bad
+      bot token, both reported at startup.

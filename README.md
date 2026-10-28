@@ -123,6 +123,78 @@ curl -s "https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates" \
 Group and supergroup ids are negative (`-100...`). Keep the quotes in
 `config.yml` so YAML never reinterprets them.
 
+## Install a published release
+
+Every `v*.*.*` tag builds the image on GitHub Actions, pushes a multi-arch
+image to the registry and attaches ready-to-run files to the release page. No
+repo clone and no local build:
+
+```bash
+# 1. pull the image and the compose file for a specific version
+IMG=ghcr.io/alexs20/rss2telegram:1.2.3
+docker pull "$IMG"
+
+# 2. config lives outside the image
+mkdir -p data
+cp config.example.yml data/config.yml   # from the release page
+$EDITOR data/config.yml                 # bot tokens + chat ids
+sudo chown -R 10001:10001 data          # the container runs as uid 10001
+
+# 3. validate, then start
+docker compose -f docker-compose.release.yml run --rm rss2tg --check
+docker compose -f docker-compose.release.yml up -d
+```
+
+The release page carries:
+
+| Asset | Use |
+|---|---|
+| `docker-compose.yml` | compose file, image pinned to that exact version |
+| `rss2telegram-<ver>-linux-amd64.tar.gz` | `gunzip -c ... \| docker load`, or Portainer image import |
+| `rss2telegram-<ver>-linux-arm64.tar.gz` | same, for Raspberry Pi / arm64 NAS |
+| `config.example.yml` | template, copy to `data/config.yml` |
+| `SHA256SUMS.txt` | `sha256sum -c SHA256SUMS.txt` |
+| `INSTALL.txt` | the same instructions as plain text |
+
+The tarball is the same image as the registry one, `docker save`d. Both tags
+(`rss2telegram:<ver>` and `rss2telegram:latest`) are restored by `docker load`,
+so the tarball path also works with `portainer-stack.yml` unchanged.
+
+`docker-compose.release.yml` in the repo is the template: it uses
+`image: ${RSS2TG_IMAGE:-ghcr.io/alexs20/rss2telegram:latest}`, so you can track
+`latest` or pin with `RSS2TG_IMAGE=ghcr.io/alexs20/rss2telegram:1.2.3`.
+
+> **One-time step after the first release:** a GHCR package starts out **private**
+> even on a public repo. If `docker pull` returns `denied`, open the package
+> page -> Package settings -> Change visibility -> Public, then pull again.
+> Release assets and the tarballs are unaffected and work either way.
+
+## Cutting a release
+
+Releases are tag-driven; nothing is published from `main`.
+
+```bash
+git tag -a v1.2.3 -m "rss2telegram 1.2.3"
+git push origin v1.2.3
+```
+
+`.github/workflows/release.yml` then:
+
+1. builds `linux/amd64` and `linux/arm64` from the same Dockerfile;
+2. smoke-tests the image (`--check` against the example config, plus a check
+   that it still runs as uid 10001);
+3. exports one tarball per architecture;
+4. pushes a multi-arch manifest to `ghcr.io/alexs20/rss2telegram` tagged
+   `1.2.3`, `1.2` and `latest`;
+5. creates the release and uploads the assets, with `--clobber` on re-runs, so a
+   failed run can be re-triggered from the Actions tab or with
+   `gh workflow run release.yml -f tag=v1.2.3`.
+
+`.github/workflows/ci.yml` runs on every push to `main` and on pull requests:
+Python syntax check, image build, the same smoke test, compose validation, and a
+guard that fails if a real `bot_token` or a tracked `data/config.yml` ever
+reaches the tree.
+
 ## Deploying to Portainer
 
 `dist/` holds everything needed to deploy without a build context:

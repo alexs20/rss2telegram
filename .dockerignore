@@ -4,3 +4,7 @@ dist
 __pycache__
 *.pyc
 .gitignore
+.github
+deploy
+docker-compose*.yml
+README.md

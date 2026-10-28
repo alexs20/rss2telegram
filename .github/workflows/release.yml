@@ -3,7 +3,7 @@ name: release
 # One tag push does everything:
 #   1. builds the image for linux/amd64 and linux/arm64
 #   2. smoke-tests it (config validation + non-root check)
-#   3. exports per-arch tarballs for `docker load` / Portainer import
+#   3. exports per-arch tarballs for `docker load` on hosts without registry access
 #   4. pushes a multi-arch image to ghcr.io so `docker pull` / compose work
 #   5. creates the GitHub release and attaches the tarballs + compose + checksums
 #
@@ -116,8 +116,8 @@ jobs:
           echo "runs as uid $uid, config validates"
 
       # Both tags land in the tarball's RepoTags, so `docker load` restores
-      # rss2telegram:latest as well - that is what portainer-stack.yml and the
-      # README already reference.
+      # rss2telegram:latest as well, so a loaded tarball is interchangeable with
+      # the registry image used by docker-compose.release.yml.
       - name: Export tarball
         env:
           SEMVER: ${{ needs.version.outputs.semver }}

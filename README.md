@@ -150,7 +150,7 @@ The release page carries:
 | Asset | Use |
 |---|---|
 | `docker-compose.yml` | compose file, image pinned to that exact version |
-| `rss2telegram-<ver>-linux-amd64.tar.gz` | `gunzip -c ... \| docker load`, or Portainer image import |
+| `rss2telegram-<ver>-linux-amd64.tar.gz` | `gunzip -c ... \| docker load`, for hosts without registry access |
 | `rss2telegram-<ver>-linux-arm64.tar.gz` | same, for Raspberry Pi / arm64 NAS |
 | `config.example.yml` | template, copy to `data/config.yml` |
 | `SHA256SUMS.txt` | `sha256sum -c SHA256SUMS.txt` |
@@ -158,7 +158,7 @@ The release page carries:
 
 The tarball is the same image as the registry one, `docker save`d. Both tags
 (`rss2telegram:<ver>` and `rss2telegram:latest`) are restored by `docker load`,
-so the tarball path also works with `portainer-stack.yml` unchanged.
+so the tarball path and the registry path are interchangeable.
 
 `docker-compose.release.yml` in the repo is the template: it uses
 `image: ${RSS2TG_IMAGE:-ghcr.io/alexs20/rss2telegram:latest}`, so you can track
@@ -195,58 +195,27 @@ Python syntax check, image build, the same smoke test, compose validation, and a
 guard that fails if a real `bot_token` or a tracked `data/config.yml` ever
 reaches the tree.
 
-## Deploying to Portainer
+## Using a release tarball instead of the registry
 
-`dist/` holds everything needed to deploy without a build context:
-
-| Artifact | Size | Use |
-|---|---|---|
-| `rss2telegram-image.tar` | 126 MB | Portainer UI: Images -> Import -> Upload |
-| `rss2telegram-image.tar.gz` | 44 MB | transfer / `docker load` over SSH |
-| `portainer-stack.yml` | 1.9 KB | stack definition, uses the pre-built image |
-| `config.yml` | 3 KB | copy of the config, edit before deploying |
-| `INSTALL.txt` | 3.4 KB | the same steps as a plain text file |
-| `rss2telegram-portainer.tgz` | 44 MB | all of the above in one archive |
-
-The tar was produced with `docker save rss2tg:latest rss2telegram:latest`, so
-loading it restores **both** tags. The image contains the service code;
-`config.yml` stays outside the image, so feed and token changes never need a
-rebuild.
-
-**Command line (fastest for 44 MB):**
+For an air-gapped host, or when you would rather not pull from a registry, the
+same image is attached to every release as a tarball:
 
 ```bash
-scp dist/rss2telegram-image.tar.gz user@portainer-host:/tmp/
-ssh user@portainer-host 'gunzip -c /tmp/rss2telegram-image.tar.gz | sudo docker load'
+# pick the arch that matches `uname -m`: x86_64 -> amd64, aarch64 -> arm64
+gunzip -c rss2telegram-1.2.3-linux-amd64.tar.gz | docker load
+# -> Loaded image: rss2telegram:1.2.3
+#    Loaded image: rss2telegram:latest
+
+sha256sum -c SHA256SUMS.txt
+
+# run it exactly like the registry image
+RSS2TG_IMAGE=rss2telegram:latest \
+  docker compose -f docker-compose.release.yml up -d
 ```
 
-Either path ends with `rss2telegram:latest` in the image list (verified by
-loading the tarball into a clean daemon and running `--check`).
-
-**Portainer UI:**
-
-1. Images -> Import -> Upload -> `rss2telegram-image.tar` (the UI wants the
-   uncompressed `.tar`; `gunzip -k` it first).
-2. Put the config on the **Portainer host**, not in Portainer:
-   `sudo mkdir -p /opt/rss2telegram && sudo cp config.yml /opt/rss2telegram/ && sudo chmod 644 /opt/rss2telegram/config.yml`
-3. Stacks -> Add stack -> Web editor -> paste `portainer-stack.yml` -> deploy.
-
-`portainer-stack.yml` differs from `docker-compose.yml` in two ways that matter:
-
-- it references `image: rss2telegram:latest` instead of `build: .`, because a
-  Portainer stack has no build context;
-- the config bind uses an **absolute** host path. Relative paths in Portainer
-  stacks resolve against Portainer's internal working directory, not the stack
-  folder.
-
-The stack was deployed and tested as written: container reached `healthy`,
-parsed the bind-mounted config, baselined both feeds and wrote to the pinned
-`rss2tg-data` volume.
-
-Watch out: if the bind source is missing, Docker silently creates an empty
-directory and the service fails with `config file not readable`. On a
-multi-node or edge setup the image must be loaded on the node that runs the
-container.
+`docker save` records both tags, so the loaded `rss2telegram:latest` is
+interchangeable with `ghcr.io/alexs20/rss2telegram:latest` - nothing else in the
+compose file or the data directory changes.
 
 ## Data and persistence
 

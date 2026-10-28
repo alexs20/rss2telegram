@@ -31,27 +31,24 @@ Option A - pull the published image (easiest, needs internet)
   docker compose logs -f                        # expect "rss2tg up: N feed(s)"
 
 
-Option B - load a tarball (no registry, offline, Portainer import)
+Option B - load a tarball (offline / air-gapped host, no registry)
 ------------------------------------------------------------------
   gunzip -c rss2telegram-<version>-linux-amd64.tar.gz | docker load
   # -> Loaded image: rss2telegram:<version>
   #    Loaded image: rss2telegram:latest
 
-  Then follow Option A, but put this in docker-compose.yml instead of the
-  pinned image line:
+  Then follow Option A unchanged, but point compose at the loaded image
+  instead of ghcr.io:
+
+      RSS2TG_IMAGE=rss2telegram:latest docker compose up -d
+
+  or edit the image: line in docker-compose.yml to
 
       image: rss2telegram:latest
 
-  Portainer instead of compose:
-    Portainer -> Images -> Import -> Upload
-      (the UI wants the UNCOMPRESSED .tar:  gunzip -k rss2telegram-...tar.gz )
-    Portainer -> Stacks -> Add stack -> Web editor -> paste docker-compose.yml
-      - relative bind paths resolve against Portainer's working directory,
-        not the stack folder, so use an absolute path such as
-        /opt/rss2telegram/data:/data
-      - `image:` lines with ${VAR:-default} need the variable set in the
-        stack's environment section, or just replace the line with
-        rss2telegram:latest
+  docker load restores both tags, so the tarball image and the registry image
+  are interchangeable - the data directory and the rest of the file are the
+  same either way.
 
 
 Which architecture do I need

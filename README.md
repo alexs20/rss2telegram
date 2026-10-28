@@ -1,4 +1,12 @@
-# rss2telegram
+# RSS 2 Telegram
+
+> **This project is fully AI-generated.** Every file - the service, the
+> Dockerfile, the CI workflows and this README - was written by an AI assistant
+> from prompts and review feedback, not by hand. It is published as-is, without
+> warranty of any kind. Read the code before you run it against a real Telegram
+> bot, and treat the security and reliability claims below as design intent to
+> verify rather than audited guarantees. Bug reports, corrections and pull
+> requests are welcome.
 
 Polls Atom/RSS feeds in Docker and pushes each new item to a Telegram group, one
 message at a time, with SQLite-backed duplicate suppression.
